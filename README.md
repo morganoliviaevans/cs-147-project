@@ -17,7 +17,7 @@ Many cat toys available today fail to keep cats consistently entertained, leadin
 
 ## Project Goals
 
-The project aims to develop a motorized toy with interchangeable attachments (feathers, bells, ribbons, etc.), automated movement that detects proximity, and visual stimulation via LEDs. The toy will use a rechargeable power source for convenience and long-term usability.
+The project focuses on developing a motorized toy with interchangeable attachments (feathers, bells, ribbons, etc.), automated movement triggered by motion detection, visual stimulation using LEDs, and bird chirping via a buzzer. Power is supplied via a rechargeable USB power bank for convenience and long-term usability.
 
 ## Repository Structure
 
@@ -27,9 +27,11 @@ The project aims to develop a motorized toy with interchangeable attachments (fe
 
 ## Hardware Components
 
-- Wemos D1 Mini ESP32 or TinyPICO ESP32
-- LEDs, Resistors, Gyroscope, 3D Accelerometer
+- LilyGo ESP32 microcontroller
+- LED Ring
+- Accelerometer
 - Motor and motor driver
-- Proximity and light sensors
-- Toy attachments (feathers, bells, etc.)
+- 3D-printed spherical housing
 - USB-powered rechargeable battery
+- Toy attachments (feathers, wiggly worms, etc)
+- Buzzer for bird chirping
