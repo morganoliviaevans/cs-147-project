@@ -14,24 +14,28 @@ Initialization and Setup
     2. Define all GPIO pins for the connected components
     3. Set default states for LEDs (off), motor (idle), and buzzer (off)
 
-State 1: Play Mode
+State 1: Play State
     1. Detect accelerometer activity
     2. Did our x-axis, y-axis, or z-axis move? Activate the toy!
     3. Adjust LED flashing rate to conserve battery (flash once every 30 seconds)
     4. Continue randomizing motor speed and direction
     5. Continue periodic bird noises
-    6. If the toy is idle for 1 minute, switch to hunting mode
+    6. If the toy is idle for 1 minute, switch to hunting state
+    7. Track play time within play state -- are we playing? Add this play time to our stored play time variable
+    8. Send play state analytics to the Cloud
 
-State 2: Hunting Mode
+State 2: Hunting State
     1. Check accelerometer data for inactivity for 1 minute
     2. Trigger attention-grabbing behavior -- LED flashing, bird noises
-    3. Once cat moves the ball, we switch back to play mode
-    4. If the cat does not move the ball after 2 minutes, go into sleep mode
+    3. Once cat moves the ball, we switch back to play state
+    4. If the cat does not move the ball after 2 minutes, go into sleep state
 
-State 3: Sleep Mode
+State 3: Sleep State
     1. Turn off LEDs and turn off the motor to conserve battery
     2. Keep accelerometer active to detect the cat’s return
-    3. Re-enter play mode upon detecting motion
+    3. Re-enter play state upon detecting motion
+    4. Track sleep time within sleep state -- are we sleeping? Add this sleep time to our stored sleep time variable
+    5. Send sleep state analytics to the Cloud
 */
 
 // ----------------------- BASIC LIBRARIES -----------------------------
@@ -40,29 +44,38 @@ State 3: Sleep Mode
 #include <stdio.h>
 #include <Arduino.h>
 // ----------------------- CLOUD ---------------------------------------
-#include "nvs.h"
-#include "esp_wifi.h"
-#include <inttypes.h>
-#include "nvs_flash.h"
-#include "esp_system.h"
-#include <HttpClient.h>
-#include "freertos/task.h"
-#include "freertos/FreeRTOS.h"
+// #include "nvs.h"
+// #include "esp_wifi.h"
+// #include <inttypes.h>
+// #include "nvs_flash.h"
+// #include "esp_system.h"
+// #include <HttpClient.h>
+// #include "freertos/task.h"
+// #include "freertos/FreeRTOS.h"
 // ----------------------- ACCELEROMETER -------------------------------
-#include <SparkFunLSM6DSO.h>
+#include "SparkFunLSM6DSO.h"
 // ----------------------- LED -----------------------------------------
 #include <Adafruit_NeoPixel.h>
 
 // ----------------------- VARIABLE DECLARATIONS -----------------------
 
-#define BUZZER_PIN 13                                                   // TO-DO: Need to set pins
-#define LED_PIN 15                                                      // TO-DO: Need to set pins
-#define NUM_LEDS 7                                                      // TO-DO: Need to set pins
+#define BUZZER_PIN 12
+#define LED_PIN 32
+#define NUM_LEDS 7
 
 // Motor pins
-#define IN1 5                                                           // TO-DO: GPIO pin connected to IN1 on L298N
-#define IN2 6                                                           // TO-DO: GPIO pin connected to IN2 on L298N
-#define EN 9                                                            // TO-DO: GPIO pin connected to EN on L298N (for speed control)
+#define ENA 2           // PWM pin for Motor 1 (speed control)
+#define ENB 15          // PWM pin for Motor 2 (speed control)
+#define IN1 27          // Motor 1 Direction
+#define IN2 26          // Motor 1 Direction
+#define IN3 25          // Motor 2 Direction
+#define IN4 33          // Motor 2 Direction
+
+// Motor PWM Configurations (speed control)
+int freq = 5000;        // PWM frequency
+int resolution = 8;     // 8-bit resolution (0-255 for duty cycle)
+int pwmChannelA = 0;    // PWM Channel for Motor 1
+int pwmChannelB = 1;    // PWM Channel for Motor 2
 
 unsigned long stateStartTime = millis();
 
@@ -75,9 +88,9 @@ DeviceState currentState = PLAY;
 
 // Accelerometer object
 LSM6DSO myIMU;
-float x_axis = myIMU.readFloatAccelX();
-float y_axis = myIMU.readFloatAccelY();
-float z_axis = myIMU.readFloatAccelZ();
+// Accelerometer variables
+float x_axis, y_axis;
+float magnitude;
 
 // ----------------------- FUNCTION DECLARATIONS -----------------------
 
@@ -86,8 +99,8 @@ void off_led();
 void slow_led();
 void play_mode();
 void flash_led();
-void run_motor();
-void stop_motor();
+void run_motors(int speed);
+void stop_motors();
 void sleep_mode();
 void hunting_mode();
 void random_colors();
@@ -97,18 +110,13 @@ void random_colors();
 void setup() {
     // Serial communication
     Serial.begin(9600);
+    delay(500);
+    // Initial state
+    Serial.println("Our initial state is PLAY!"); 
     // Initialize I2C  
     Wire.begin();
     delay(500); 
    
-    pinMode(LED_PIN, OUTPUT);
-    pinMode(BUZZER_PIN, OUTPUT);
-
-    // Initialize LED
-    strip.begin();
-    // Initialize our color to off
-    strip.show();  
-
     // Initialize accelerometer
     if (myIMU.begin()) {
         Serial.println("Ready.");
@@ -118,19 +126,41 @@ void setup() {
     // Apply a set of default configuration settings to the accelerometer sensor
     myIMU.initialize(BASIC_SETTINGS);
 
+    pinMode(LED_PIN, OUTPUT);
+    pinMode(BUZZER_PIN, OUTPUT);
+
+    // Initialize LED
+    strip.begin();
+    // Initialize our color to off
+    strip.show();  
+
     // Initialize motor
+    // Set direction pins as outputs
     pinMode(IN1, OUTPUT);
     pinMode(IN2, OUTPUT);
-    pinMode(EN, OUTPUT);
+    pinMode(IN3, OUTPUT);
+    pinMode(IN4, OUTPUT);
 
-    // Start the motor driver in the disabled state
+    // Start the motor driver in a disabled state
     digitalWrite(IN1, LOW);
     digitalWrite(IN2, LOW);
+    digitalWrite(IN3, LOW);
+    digitalWrite(IN4, LOW);
+
+    // Configure PWM channels
+    ledcSetup(pwmChannelA, freq, resolution);
+    ledcSetup(pwmChannelB, freq, resolution);
+
+    // Attach PWM channels to GPIO pins
+    ledcAttachPin(ENA, pwmChannelA);
+    ledcAttachPin(ENB, pwmChannelB);
+
     // Set motor speed to 0
-    analogWrite(EN, 0); 
+    ledcWrite(pwmChannelA, 0);
+    ledcWrite(pwmChannelB, 0);
 
     // After device is turned on and initialized, we delay for 30 seconds to screw the ball back together and put it down for play
-    delay(30000);
+    //delay(30000);
 }
 
 // ----------------------- LOOP ----------------------------------------
@@ -138,62 +168,90 @@ void setup() {
 void loop() {
 
     // TO-DO: Incorporate data analytics for AWS
+    // Create variable to store play time
+    // Create variable to store sleep time
+    // Track play time within PLAY state -- are we playing? Add this play time to our stored play time variable
+    // Track sleep time within SLEEP state -- are we sleeping? Add this sleep time to our stored sleep time variable
+    // This will let us know on average how often the cats are playing with the device, and how long the device is sleeping
+    // Send both PLAY state and SLEEP state analytics to the Cloud
 
     // Update accelerometer data every loop
     x_axis = myIMU.readFloatAccelX();
     y_axis = myIMU.readFloatAccelY();
-    z_axis = myIMU.readFloatAccelZ();
+
+    // Print values for debugging
+    Serial.print("x_axis: "); 
+    Serial.println(x_axis);
+    Serial.print("y_axis: "); 
+    Serial.println(y_axis);
+    Serial.print("Magnitude: "); 
+    Serial.println(magnitude);
+    Serial.println();
 
     switch (currentState) {
 
         case PLAY:
+            // Debugging
+            Serial.println("State: PLAY");
+            Serial.println();
             // Go into play mode
             play_mode();
-            // Debugging
-            Serial.println("State changed to PLAY");
+
+            // Calculate motion magnitude
+            magnitude = sqrt(x_axis * x_axis + y_axis * y_axis);
+
             // If motion is not detected
-            if (x_axis == 0 && y_axis == 0 && z_axis == 0) {
+            if (magnitude < 0.5) {
+                unsigned long elapsed = millis() - stateStartTime;
                 // And if it has been more than 1 minute
-                if (millis() - stateStartTime > 60000) { 
+                if (millis() - stateStartTime > 10000) { 
                     // Switch to hunting state
                     currentState = HUNTING;
                     // Reset timer for hunting state
                     stateStartTime = millis();
                 }
-                // If it has been more than 2 minutes
-                if (millis() - stateStartTime > 120000) {
-                    // Switch to sleep state
-                    currentState = SLEEP;
-                }
             }
             break;
 
         case HUNTING:
+            // Debugging
+            Serial.println("State: HUNTING");
+            Serial.println();
             // Go into hunting mode
             hunting_mode();
-            // Debugging
-            Serial.println("State changed to HUNTING");
+
+            // Calculate motion magnitude
+            magnitude = sqrt(x_axis * x_axis + y_axis * y_axis);
+
             // If motion is detected
-            if (x_axis > 0 || y_axis > 0 || z_axis > 0) {
+            if (magnitude > 0.5) {
                 // Switch to play state
                 currentState = PLAY;
+                stateStartTime = millis();
             } 
             // If it has been more than 2 minutes
-            if (millis() - stateStartTime > 120000) {
+            if (millis() - stateStartTime > 20000) {
                 // Switch to sleep state
                 currentState = SLEEP;
+                stateStartTime = millis();
             }
             break;
 
         case SLEEP:
+            // Debugging
+            Serial.println("State: SLEEP");
+            Serial.println();
             // Go into sleep mode
             sleep_mode();
-            // Debugging
-            Serial.println("State changed to SLEEP");
+
+            // Calculate motion magnitude
+            magnitude = sqrt(x_axis * x_axis + y_axis * y_axis);
+
             // If motion is detected
-            if (x_axis || y_axis || z_axis > 0) { 
+            if (magnitude > 0.5) { 
                 // Switch to play state    
                 currentState = PLAY;
+                stateStartTime = millis();
             }
             break;
     }
@@ -225,23 +283,30 @@ void random_colors() {
         strip.Color(255, 192, 203)  // Pink
     };
 
-    for (int i = 0; i < 2; i++) {
-        // Cycle through each color in the array
-        for (int i = 0; i < sizeof(colors) / sizeof(colors[0]); i++) {
-            // Set the LED to the current color
-            strip.setPixelColor(0, colors[i]);  
-            // Display our color
+    for (int i = 0; i < 4; i++) {
+        // Cycle through each color in our array
+        for (int colorIndex = 0; colorIndex < sizeof(colors) / sizeof(colors[0]); colorIndex++) {
+            // Set all LEDs to the same color
+            for (int i = 0; i < NUM_LEDS; i++) {
+                strip.setPixelColor(i, colors[colorIndex]);
+            }
+            // Display the color on the LED
             strip.show();
-            delay(250);  
+            // Hold each color for 0.200 second
+            delay(200); 
         }
+        // Turn off the LED
         off_led();
-        delay(500);
     }
 }
 
 void off_led() {
-    // Shut off the LED
-    digitalWrite(LED_PIN, LOW);
+    // Shut off the LED by setting it to black
+    for (int i = 0; i < NUM_LEDS; i++) {
+        strip.setPixelColor(i, strip.Color(0, 0, 0));
+    }
+    // Display "black" e.g. show that it is shut off
+    strip.show();
 }
 
 void slow_led() {
@@ -249,8 +314,8 @@ void slow_led() {
     digitalWrite(LED_PIN, HIGH);
     // Flash LED
     random_colors();
-    // Delay for 30 seconds
-    delay(30000);
+    // Delay for 2 seconds
+    delay(2000);
 }
 
 void flash_led() {
@@ -258,81 +323,90 @@ void flash_led() {
     digitalWrite(LED_PIN, HIGH);
     // Flash LED
     random_colors();
-    // Delay for 10 seconds
-    delay(10000);
 }
 
-void stop_motor() {
-    // Stop our motor
+void stop_motors() {
+    // Stop Motor 1
     digitalWrite(IN1, LOW);
     digitalWrite(IN2, LOW);
-    // Set motor speed to 0
-    analogWrite(EN, 0); 
+    ledcWrite(pwmChannelA, 0);
+
+    // Stop Motor 2
+    digitalWrite(IN3, LOW);
+    digitalWrite(IN4, LOW);
+    ledcWrite(pwmChannelB, 0);
 }
 
-void run_motor(int speed) {                                  // TO-DO: Will likely need to adjust motor speed and movements
-    // Move forward
-    digitalWrite(IN1, HIGH); 
-    digitalWrite(IN2, LOW);  
-    analogWrite(EN, speed);
-    // Move forward for a random duration (0.5 second to 2 seconds)
-    delay(random(500, 2000));
+void run_motors(int speed) {                                            
+    // Move forward (both motors complement each other)
+    // Motor 1 forward
+    Serial.println("Motor 1 Forward...");
+    digitalWrite(IN1, HIGH);
+    digitalWrite(IN2, LOW);
+    // Motor 2 forward (opposite wiring)
+    Serial.println("Motor 2 Forward...");
+    digitalWrite(IN3, LOW);   
+    digitalWrite(IN4, HIGH);
+    ledcWrite(pwmChannelA, speed);
+    ledcWrite(pwmChannelB, speed);
+    // Move forward for a random duration (0.200 second to 0.5 second)
+    delay(random(200, 500));
 
-    // Pause motor for a random duration (0.5 second to 1 second)
-    stop_motor();
-    delay(random(500, 1000));
+    // Pause motors for a random duration (0.200 second to 0.5 second)
+    stop_motors();
+    Serial.println("Stopping Motors...");
+    delay(random(200, 500));
 
-    // Move backward
+    // Move backward (both motors complement each other)
+    // Motor 1 backward
+    Serial.println("Motor 1 Backward...");
     digitalWrite(IN1, LOW);
     digitalWrite(IN2, HIGH);
-    analogWrite(EN, speed);
-    // Move backward for a random duration (0.5 second to 2 seconds)
-    delay(random(500, 2000));
+    // Motor 2 backward (opposite wiring)
+    Serial.println("Motor 2 Backward...");
+    digitalWrite(IN3, HIGH); 
+    digitalWrite(IN4, LOW);
+    ledcWrite(pwmChannelA, speed);
+    ledcWrite(pwmChannelB, speed);
+    // Move backward for a random duration (0.200 second to 0.5 second)
+    delay(random(200, 500));
 
-    // Pause motor for a random duration (0.5 second to 1 second)
-    stop_motor();
-    delay(random(500, 1000));
+    // Pause motors
+    stop_motors();
 }
 
 void play_mode() {
-    for (int i = 0; i < 10; i++) {  
+        Serial.println("Play Mode...");
+        delay(1000);
         // Run the motor with random speed (between 100 and 200)
-        int randomSpeed = random(100, 200);
-        run_motor(randomSpeed);
-        // Random chirping (e.g. 50% chance)
-        if (random(0, 10) > 5) {
-            chirp();
-        }
+        //int randomSpeed = random(100, 200);
+        run_motors(200);
+        // Chirp!
+        chirp();
         // Flash the slower LED
         slow_led();
-        // Short random pause after LED (pause between 500ms and 1 second)
-        delay(random(500, 1000));
-    }
 }
 
 // Chirp and flash to get the cat's attention
 void hunting_mode() {
-    for (int i = 0; i < 10; i++) {  
+        Serial.println("Hunting Mode...");
+        delay(1000);
         // Random chance to chirp first or flash LED first
         if (random(0, 2) == 0) {
             chirp();
-            delay(random(300, 700));  
             flash_led();
         } else {
-            flash_led();
-            delay(random(300, 700));  
+            flash_led();  
             chirp();
         }
-        // Short pause after LED
-        delay(1000);
-    }
 }
 
 void sleep_mode() {
+    Serial.println("Sleep Mode...");
     // Turn off LED
     off_led();
-    // Stop motor
-    stop_motor();
+    // Stop motors
+    stop_motors();
 }
 
 void chirp() {
