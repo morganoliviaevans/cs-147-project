@@ -3,7 +3,7 @@ CS 147: IoT Software and Systems
 Course Project - Motorized Cat Toy
 Team Member 1: Morgan Newton
 Team Member 2: Carm Hermosilla
-Due Date: 
+Due Date: 12-13-2024
 */
 
 /*
@@ -47,11 +47,13 @@ State 3: Sleep State
 // #include "nvs.h"
 // #include "esp_wifi.h"
 // #include <inttypes.h>
-// #include "nvs_flash.h"
+#include "nvs_flash.h"
 // #include "esp_system.h"
-// #include <HttpClient.h>
+#include <HttpClient.h>
 // #include "freertos/task.h"
 // #include "freertos/FreeRTOS.h"
+#include <WiFi.h>
+// #include <AWS_IOT.h> // IoT SDK
 // ----------------------- ACCELEROMETER -------------------------------
 #include "SparkFunLSM6DSO.h"
 // ----------------------- LED -----------------------------------------
@@ -71,6 +73,11 @@ State 3: Sleep State
 #define IN3 25          // Motor 2 Direction
 #define IN4 33          // Motor 2 Direction
 
+// Network SSID
+char ssid[50];
+// Network Password
+char pass[50];
+
 // Motor PWM Configurations (speed control)
 int freq = 5000;        // PWM frequency
 int resolution = 8;     // 8-bit resolution (0-255 for duty cycle)
@@ -78,6 +85,10 @@ int pwmChannelA = 0;    // PWM Channel for Motor 1
 int pwmChannelB = 1;    // PWM Channel for Motor 2
 
 unsigned long stateStartTime = millis();
+unsigned long playTime = 0; // For tracking PLAY state total time
+unsigned long sleepTime = 0; // For tracking SLEEP state total time
+unsigned long playStartTime = 0;
+unsigned long sleepStartTime = 0;
 
 // NeoPixel strip object
 Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
@@ -104,6 +115,8 @@ void stop_motors();
 void sleep_mode();
 void hunting_mode();
 void random_colors();
+void nvs_access();
+void send_time_AWS();
 
 // ----------------------- SETUP ---------------------------------------
 
@@ -116,6 +129,27 @@ void setup() {
     // Initialize I2C  
     Wire.begin();
     delay(500); 
+    // Get Wifi creds for non-volatile storage
+    nvs_access(); 
+    // Connect to Wi-Fi
+    Serial.print("Connecting to ");
+    Serial.println(ssid);
+    WiFi.begin(ssid, pass);
+    // While wifi not connected...
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.println(".");
+    }
+    Serial.println("Connected to WiFi. Have fun!");
+    Serial.println("IP address: ");
+    Serial.println(WiFi.localIP());
+    Serial.println("MAC address: ");
+    Serial.println(WiFi.macAddress());
+    // // Begins AWS instance 
+    // AWS_IOT aws; 
+    // aws.begin();
+    send_time_AWS(playTime, sleepTime);
+    playStartTime = millis();
    
     // Initialize accelerometer
     if (myIMU.begin()) {
@@ -196,7 +230,11 @@ void loop() {
             Serial.println();
             // Go into play mode
             play_mode();
-
+            // For tracking the current play time session
+            unsigned long currentPlayTime = millis() - playStartTime;
+            playTime += currentPlayTime;
+            // stateStartTime = millis(); // Reset timer
+            send_time_AWS(playTime, sleepTime);
             // Calculate motion magnitude
             magnitude = sqrt(x_axis * x_axis + y_axis * y_axis);
 
@@ -217,6 +255,9 @@ void loop() {
             // Debugging
             Serial.println("State: HUNTING");
             Serial.println();
+            // Reset playTime 
+            send_time_AWS(playTime, sleepTime);
+            playTime = 0; // Reset playTime after sending
             // Go into hunting mode
             hunting_mode();
 
@@ -241,6 +282,10 @@ void loop() {
             // Debugging
             Serial.println("State: SLEEP");
             Serial.println();
+            sleepTime = millis() - sleepStartTime;
+
+            // Send play and sleep time to AWS
+            send_time_AWS(playTime, sleepTime);
             // Go into sleep mode
             sleep_mode();
 
@@ -480,10 +525,10 @@ void chirp() {
     }
 }
 
-// Code from Lab 4, sends to AWS
+// ------------------------------------- Data Analytics --------------------------------------
 
-void sendToAWS() {
-    void nvs_access() {
+// Non-volatile storage: Keeps data even if toy runs out of battery
+void nvs_access() {
 
     // Initialize NVS
     esp_err_t err = nvs_flash_init();
@@ -525,4 +570,48 @@ void sendToAWS() {
     // Close
     nvs_close(my_handle);
 }
+
+void send_time_AWS(unsigned long playTime, unsigned long sleepTime) {
+    Serial.print("Sending play time to AWS: ");
+    Serial.println(playTime);
+    Serial.print("Sending sleep time to AWS: ");
+    Serial.println(sleepTime);
+
+    WiFiClient client; 
+    // Send POST request
+    if (client.connect("3.85.208.114", 5000)) {
+        String payload = "{\"playTime\": " + String(playTime) + ", \"sleepTime\": " + String(sleepTime) + "}";
+
+        client.println("POST /send-time HTTP/1.1");
+        client.println("Host: 3.85.208.114");
+        client.println("Content-Type: application/json");
+        client.print("Content-Length: ");
+        client.println(payload.length());
+        client.println();
+        client.print(payload);
+
+        // Read response from client (the debugger)
+        String response = client.readString();
+        Serial.println("Response: " + response);
+
+        client.stop();
+    } else {
+        Serial.println("Failed to connect to the server.");
+    }
 }
+
+// Saves sleep & play times as a .csv for matplotlib graphing (OPT)
+// TODO: Fix for non-SD card purposes
+// void save_time_to_csv(unsigned long playTime, unsigned long sleepTime) {
+//     // APPENDS new times
+//     File dataFile = SD.open("/times.csv", FILE_APPEND);
+
+//     if (dataFile) {
+//         dataFile.print(playTime);
+//         dataFile.print(",");
+//         dataFile.println(sleepTime);  
+//         dataFile.close();
+//     } else {
+//         Serial.println("Error opening times.csv");
+//     }
+// }
