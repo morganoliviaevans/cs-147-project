@@ -17,7 +17,7 @@ Many cat toys available today fail to keep cats consistently entertained, leadin
 
 ## Project Goals
 
-The project focuses on developing a motorized toy with interchangeable attachments (feathers, bells, ribbons, etc.), automated movement triggered by motion detection, visual stimulation using LEDs, and bird chirping via a buzzer. Power is supplied via a rechargeable USB power bank for convenience and long-term usability.
+The project focuses on developing a motorized toy with interchangeable attachments (feathers, bells, ribbons, etc.), automated movement triggered by motion detection, visual stimulation using LEDs, and bird chirping via a buzzer. Power is supplied via rechargeable LIPO battery for convenience and long-term usability.
 
 ## Repository Structure
 
@@ -30,8 +30,8 @@ The project focuses on developing a motorized toy with interchangeable attachmen
 - LilyGo ESP32 microcontroller
 - LED Ring
 - Accelerometer
-- Motor and motor driver
+- Motor and Motor Driver
 - 3D-printed spherical housing
-- USB-powered rechargeable battery
-- Toy attachments (feathers, wiggly worms, etc)
-- Buzzer for bird chirping
+- LIPO battery
+- Toy attachments (feathers, wiggly worms, etc.)
+- Buzzer
