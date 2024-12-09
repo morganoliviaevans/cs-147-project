@@ -104,6 +104,7 @@ void stop_motors();
 void sleep_mode();
 void hunting_mode();
 void random_colors();
+void ramp_down_motor_speed(int initialSpeed, int targetSpeed, int rampTime);
 
 // ----------------------- SETUP ---------------------------------------
 
@@ -337,42 +338,110 @@ void stop_motors() {
     ledcWrite(pwmChannelB, 0);
 }
 
-void run_motors(int speed) {                                            
+// void run_motors(int speed) {                                            
+//     // Move forward (both motors complement each other)
+//     // Motor 1 forward
+//     Serial.println("Motor 1 Forward...");
+//     digitalWrite(IN1, HIGH);
+//     digitalWrite(IN2, LOW);
+//     // Motor 2 forward (opposite wiring)
+//     Serial.println("Motor 2 Forward...");
+//     digitalWrite(IN3, LOW);   
+//     digitalWrite(IN4, HIGH);
+//     ledcWrite(pwmChannelA, speed);
+//     ledcWrite(pwmChannelB, speed);
+//     // Move forward for a random duration (0.200 second to 0.5 second)
+//     delay(random(1000, 2000));
+
+//     // Pause motors for a random duration (0.200 second to 0.5 second)
+//     stop_motors();
+//     Serial.println("Stopping Motors...");
+//     delay(random(1000, 2000));
+
+//     // Move backward (both motors complement each other)
+//     // Motor 1 backward
+//     Serial.println("Motor 1 Backward...");
+//     digitalWrite(IN1, LOW);
+//     digitalWrite(IN2, HIGH);
+//     // Motor 2 backward (opposite wiring)
+//     Serial.println("Motor 2 Backward...");
+//     digitalWrite(IN3, HIGH); 
+//     digitalWrite(IN4, LOW);
+//     ledcWrite(pwmChannelA, speed);
+//     ledcWrite(pwmChannelB, speed);
+//     // Move backward for a random duration (0.200 second to 0.5 second)
+//     delay(random(1000, 2000));
+
+//     // Pause motors
+//     stop_motors();
+// }
+
+void run_motors(int targetSpeed) {                                            
+    // Define ramp parameters
+    int initialSpeed = 120;  // Starting speed for ramp-up
+    int rampTime = 2000;    // Time to ramp down (in milliseconds)
+
     // Move forward (both motors complement each other)
-    // Motor 1 forward
     Serial.println("Motor 1 Forward...");
     digitalWrite(IN1, HIGH);
     digitalWrite(IN2, LOW);
-    // Motor 2 forward (opposite wiring)
     Serial.println("Motor 2 Forward...");
     digitalWrite(IN3, LOW);   
     digitalWrite(IN4, HIGH);
-    ledcWrite(pwmChannelA, speed);
-    ledcWrite(pwmChannelB, speed);
-    // Move forward for a random duration (0.200 second to 0.5 second)
-    delay(random(200, 500));
 
-    // Pause motors for a random duration (0.200 second to 0.5 second)
+    // Ramp down motor speed forward
+    ramp_down_motor_speed(initialSpeed, targetSpeed, rampTime);
+
+    // Keep moving at the target speed for a random duration
+    delay(random(4000, 6000));
+
+    // Pause motors for a random duration
     stop_motors();
     Serial.println("Stopping Motors...");
-    delay(random(200, 500));
+    delay(random(1500, 3000));
 
     // Move backward (both motors complement each other)
-    // Motor 1 backward
     Serial.println("Motor 1 Backward...");
     digitalWrite(IN1, LOW);
     digitalWrite(IN2, HIGH);
-    // Motor 2 backward (opposite wiring)
     Serial.println("Motor 2 Backward...");
     digitalWrite(IN3, HIGH); 
     digitalWrite(IN4, LOW);
-    ledcWrite(pwmChannelA, speed);
-    ledcWrite(pwmChannelB, speed);
-    // Move backward for a random duration (0.200 second to 0.5 second)
-    delay(random(200, 500));
+
+    // Ramp down motor speed backward
+    ramp_down_motor_speed(initialSpeed, targetSpeed, rampTime);
+
+    // Keep moving at the target speed for a random duration
+    delay(random(4000, 6000));
 
     // Pause motors
     stop_motors();
+}
+
+void ramp_down_motor_speed(int initialSpeed, int targetSpeed, int rampTime) {
+    int stepDelay = 100; // Time delay between steps (in milliseconds)
+    int steps = rampTime / stepDelay; // Number of steps to reach target speed
+    int speedStep = (initialSpeed - targetSpeed) / steps; // Speed decrement per step
+
+    // Start motor at the initial speed
+    ledcWrite(pwmChannelA, initialSpeed);
+    ledcWrite(pwmChannelB, initialSpeed);
+
+    for (int i = 0; i < steps; i++) {
+        int currentSpeed = initialSpeed - (speedStep * i);
+        if (currentSpeed < targetSpeed) break;
+
+        // Update motor speed
+        ledcWrite(pwmChannelA, currentSpeed);
+        ledcWrite(pwmChannelB, currentSpeed);
+
+        // Wait before adjusting speed further
+        delay(stepDelay);
+    }
+
+    // Final adjustment to target speed
+    ledcWrite(pwmChannelA, targetSpeed);
+    ledcWrite(pwmChannelB, targetSpeed);
 }
 
 void play_mode() {
@@ -380,7 +449,9 @@ void play_mode() {
         delay(1000);
         // Run the motor with random speed (between 100 and 200)
         //int randomSpeed = random(100, 200);
-        run_motors(200);
+        // Target Speed
+        int targetSpeed = (60);
+        run_motors(targetSpeed);
         // Chirp!
         chirp();
         // Flash the slower LED
