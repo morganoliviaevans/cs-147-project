@@ -3,7 +3,7 @@ CS 147: IoT Software and Systems
 Course Project - Motorized Cat Toy
 Team Member 1: Morgan Newton
 Team Member 2: Carm Hermosilla
-Due Date: 
+Due Date: 12-13-2024
 */
 
 /*
@@ -44,14 +44,15 @@ State 3: Sleep State
 #include <stdio.h>
 #include <Arduino.h>
 // ----------------------- CLOUD ---------------------------------------
-// #include "nvs.h"
-// #include "esp_wifi.h"
-// #include <inttypes.h>
-// #include "nvs_flash.h"
-// #include "esp_system.h"
-// #include <HttpClient.h>
-// #include "freertos/task.h"
-// #include "freertos/FreeRTOS.h"
+#include "nvs.h"
+#include "esp_wifi.h"
+#include "nvs_flash.h"
+#include "esp_system.h"
+#include <HttpClient.h>
+#include "freertos/task.h"
+#include "freertos/FreeRTOS.h"
+#include <WiFi.h>
+
 // ----------------------- ACCELEROMETER -------------------------------
 #include "SparkFunLSM6DSO.h"
 // ----------------------- LED -----------------------------------------
@@ -71,6 +72,10 @@ State 3: Sleep State
 #define IN3 25          // Motor 2 Direction
 #define IN4 33          // Motor 2 Direction
 
+// Network
+char ssid[50];          // SSID
+char pass[50];          // Password
+
 // Motor PWM Configurations (speed control)
 int freq = 5000;        // PWM frequency
 int resolution = 8;     // 8-bit resolution (0-255 for duty cycle)
@@ -78,6 +83,10 @@ int pwmChannelA = 0;    // PWM Channel for Motor 1
 int pwmChannelB = 1;    // PWM Channel for Motor 2
 
 unsigned long stateStartTime = millis();
+unsigned long playTime = 0; // For tracking PLAY state total time
+unsigned long sleepTime = 0; // For tracking SLEEP state total time
+unsigned long playStartTime = 0;
+unsigned long sleepStartTime = 0;
 
 // NeoPixel strip object
 Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
@@ -92,6 +101,9 @@ LSM6DSO myIMU;
 float x_axis, y_axis;
 float magnitude;
 
+// // AWS object
+// AWS_IOT aws;
+
 // ----------------------- FUNCTION DECLARATIONS -----------------------
 
 void chirp();
@@ -99,16 +111,20 @@ void off_led();
 void slow_led();
 void play_mode();
 void flash_led();
-void run_motors(int speed);
-void stop_motors();
 void sleep_mode();
+void nvs_access();
+void stop_motors();
 void hunting_mode();
 void random_colors();
+void reset_AWS_data();
+void run_motors(int speed);
+void send_time_AWS(unsigned long playTime, unsigned long sleepTime);
+void ramp_down_motor_speed(int initialSpeed, int targetSpeed, int rampTime);
 
 // ----------------------- SETUP ---------------------------------------
 
 void setup() {
-    // Serial communication
+    // ------------------- SERIAL COMMUNICATION ------------------------
     Serial.begin(9600);
     delay(500);
     // Initial state
@@ -116,7 +132,32 @@ void setup() {
     // Initialize I2C  
     Wire.begin();
     delay(500); 
-   
+
+    // ------------------- WIFI INITIALIZATION -------------------------
+    // Get Wifi creds for non-volatile storage
+    nvs_access(); 
+    // Connect to Wi-Fi
+    Serial.print("Connecting to ");
+    Serial.println(ssid);
+    WiFi.begin(ssid, pass);
+    // While wifi not connected...
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.println(".");
+    }
+    Serial.println("Connected to WiFi. Have fun!");
+    Serial.println("IP address: ");
+    Serial.println(WiFi.localIP());
+    Serial.println("MAC address: ");
+    Serial.println(WiFi.macAddress());
+
+    // ------------------- AWS INTITALIZATION --------------------------
+    //aws.begin();
+    send_time_AWS(playTime, sleepTime);
+    playStartTime = millis();
+
+    // ------------------- ACCELEROMETER INTITALIZATION ----------------
+
     // Initialize accelerometer
     if (myIMU.begin()) {
         Serial.println("Ready.");
@@ -125,6 +166,8 @@ void setup() {
     }
     // Apply a set of default configuration settings to the accelerometer sensor
     myIMU.initialize(BASIC_SETTINGS);
+
+    // ------------------- LED / BUZZER / MOTOR INTITALIZATIONS --------
 
     pinMode(LED_PIN, OUTPUT);
     pinMode(BUZZER_PIN, OUTPUT);
@@ -160,20 +203,22 @@ void setup() {
     ledcWrite(pwmChannelB, 0);
 
     // After device is turned on and initialized, we delay for 30 seconds to screw the ball back together and put it down for play
-    //delay(30000);
+    delay(30000);
 }
 
 // ----------------------- LOOP ----------------------------------------
 
 void loop() {
 
-    // TO-DO: Incorporate data analytics for AWS
-    // Create variable to store play time
-    // Create variable to store sleep time
-    // Track play time within PLAY state -- are we playing? Add this play time to our stored play time variable
-    // Track sleep time within SLEEP state -- are we sleeping? Add this sleep time to our stored sleep time variable
-    // This will let us know on average how often the cats are playing with the device, and how long the device is sleeping
-    // Send both PLAY state and SLEEP state analytics to the Cloud
+    // Test command via serial monitor to reset AWS data for testing
+    if (Serial.available() > 0) {
+        char command = Serial.read();
+        if (command == 'r') {  // 'r' for reset
+            reset_AWS_data();
+        }
+    }
+
+    unsigned long currentPlayTime = 0;
 
     // Update accelerometer data every loop
     x_axis = myIMU.readFloatAccelX();
@@ -194,8 +239,17 @@ void loop() {
             // Debugging
             Serial.println("State: PLAY");
             Serial.println();
+
+            // Track the current play time session
+            playTime += millis() - playStartTime;
+            // Reset play timer
+            playStartTime = millis();                               
+
             // Go into play mode
             play_mode();
+
+            // Send play time to AWS 
+            send_time_AWS(playTime, sleepTime);
 
             // Calculate motion magnitude
             magnitude = sqrt(x_axis * x_axis + y_axis * y_axis);
@@ -203,11 +257,11 @@ void loop() {
             // If motion is not detected
             if (magnitude < 0.5) {
                 unsigned long elapsed = millis() - stateStartTime;
-                // And if it has been more than 1 minute
-                if (millis() - stateStartTime > 10000) { 
+                // And if it has been more than 1 minute                    // TESTING: CHANGED TO 5 SECONDS
+                if (millis() - stateStartTime > 5000) { 
                     // Switch to hunting state
                     currentState = HUNTING;
-                    // Reset timer for hunting state
+                    // Reset state timer
                     stateStartTime = millis();
                 }
             }
@@ -217,8 +271,17 @@ void loop() {
             // Debugging
             Serial.println("State: HUNTING");
             Serial.println();
+
+            // Track the current play time session
+            playTime += millis() - playStartTime;
+            // Reset play timer
+            playStartTime = millis();        
+
             // Go into hunting mode
-            hunting_mode();
+            hunting_mode();      
+
+            // Send play time to AWS    
+            send_time_AWS(playTime, sleepTime);    
 
             // Calculate motion magnitude
             magnitude = sqrt(x_axis * x_axis + y_axis * y_axis);
@@ -227,12 +290,14 @@ void loop() {
             if (magnitude > 0.5) {
                 // Switch to play state
                 currentState = PLAY;
+                // Reset state timer
                 stateStartTime = millis();
             } 
-            // If it has been more than 2 minutes
-            if (millis() - stateStartTime > 20000) {
+            // If it has been more than 2 minutes                    // TESTING: CHANGED TO 5 SECONDS
+            if (millis() - stateStartTime > 5000) {
                 // Switch to sleep state
                 currentState = SLEEP;
+                // Reset state timer
                 stateStartTime = millis();
             }
             break;
@@ -241,8 +306,18 @@ void loop() {
             // Debugging
             Serial.println("State: SLEEP");
             Serial.println();
+
             // Go into sleep mode
             sleep_mode();
+
+            // Prevent carryover        
+            playStartTime = millis();                               
+            // Track the current sleep time session
+            sleepTime += millis() - sleepStartTime;                 
+            // Reset sleep timer
+            sleepStartTime = millis();                              
+            // Send play and sleep time to AWS
+            send_time_AWS(playTime, sleepTime);
 
             // Calculate motion magnitude
             magnitude = sqrt(x_axis * x_axis + y_axis * y_axis);
@@ -251,7 +326,8 @@ void loop() {
             if (magnitude > 0.5) { 
                 // Switch to play state    
                 currentState = PLAY;
-                stateStartTime = millis();
+                // Reset state timer
+                stateStartTime = millis();                          
             }
             break;
     }
@@ -337,50 +413,83 @@ void stop_motors() {
     ledcWrite(pwmChannelB, 0);
 }
 
-void run_motors(int speed) {                                            
-    // Move forward (both motors complement each other)
-    // Motor 1 forward
+void run_motors(int targetSpeed) {                                            
+    // Define ramp parameters
+    int initialSpeed = 150;  // Starting speed for ramp-up
+    int rampTime = 2000;    // Time to ramp down (in milliseconds)
+
+    // Move motor 1 forward
     Serial.println("Motor 1 Forward...");
     digitalWrite(IN1, HIGH);
     digitalWrite(IN2, LOW);
-    // Motor 2 forward (opposite wiring)
-    Serial.println("Motor 2 Forward...");
+    // Move motor 2 backward
+    Serial.println("Motor 2 Backward...");
     digitalWrite(IN3, LOW);   
     digitalWrite(IN4, HIGH);
-    ledcWrite(pwmChannelA, speed);
-    ledcWrite(pwmChannelB, speed);
-    // Move forward for a random duration (0.200 second to 0.5 second)
-    delay(random(200, 500));
 
-    // Pause motors for a random duration (0.200 second to 0.5 second)
+    // Ramp down motor speed forward
+    ramp_down_motor_speed(initialSpeed, targetSpeed, rampTime);
+
+    // Keep moving at the target speed for a random duration
+    delay(random(4000, 6000));
+
+    // Pause motors for a random duration
     stop_motors();
     Serial.println("Stopping Motors...");
-    delay(random(200, 500));
+    delay(random(1500, 3000));
 
-    // Move backward (both motors complement each other)
-    // Motor 1 backward
-    Serial.println("Motor 1 Backward...");
-    digitalWrite(IN1, LOW);
-    digitalWrite(IN2, HIGH);
-    // Motor 2 backward (opposite wiring)
+    // Move motor 1 forward
+    Serial.println("Motor 1 Forward...");
+    digitalWrite(IN1, HIGH);
+    digitalWrite(IN2, LOW);
+    // Move motor 2 backward
     Serial.println("Motor 2 Backward...");
-    digitalWrite(IN3, HIGH); 
-    digitalWrite(IN4, LOW);
-    ledcWrite(pwmChannelA, speed);
-    ledcWrite(pwmChannelB, speed);
-    // Move backward for a random duration (0.200 second to 0.5 second)
-    delay(random(200, 500));
+    digitalWrite(IN3, LOW);   
+    digitalWrite(IN4, HIGH);
+
+    // Ramp down motor speed backward
+    ramp_down_motor_speed(initialSpeed, targetSpeed, rampTime);
+
+    // Keep moving at the target speed for a random duration
+    delay(random(4000, 6000));
 
     // Pause motors
     stop_motors();
 }
 
+
+void ramp_down_motor_speed(int initialSpeed, int targetSpeed, int rampTime) {
+    int stepDelay = 100; // Time delay between steps (in milliseconds)
+    int steps = rampTime / stepDelay; // Number of steps to reach target speed
+    int speedStep = (initialSpeed - targetSpeed) / steps; // Speed decrement per step
+
+    // Start motor at the initial speed
+    ledcWrite(pwmChannelA, initialSpeed);
+    ledcWrite(pwmChannelB, initialSpeed);
+
+    for (int i = 0; i < steps; i++) {
+        int currentSpeed = initialSpeed - (speedStep * i);
+        if (currentSpeed < targetSpeed) break;
+
+        // Update motor speed
+        ledcWrite(pwmChannelA, currentSpeed);
+        ledcWrite(pwmChannelB, currentSpeed);
+
+        // Wait before adjusting speed further
+        delay(stepDelay);
+    }
+
+    // Final adjustment to target speed
+    ledcWrite(pwmChannelA, targetSpeed);
+    ledcWrite(pwmChannelB, targetSpeed);
+}
+
 void play_mode() {
         Serial.println("Play Mode...");
         delay(1000);
-        // Run the motor with random speed (between 100 and 200)
-        //int randomSpeed = random(100, 200);
-        run_motors(200);
+        // Target Speed
+        int targetSpeed = (100);
+        run_motors(targetSpeed);
         // Chirp!
         chirp();
         // Flash the slower LED
@@ -478,4 +587,89 @@ void chirp() {
         digitalWrite(BUZZER_PIN, LOW);
         delayMicroseconds(pitch);
     }
+}
+
+// ----------------------- Data Analytics -----------------------
+
+// Non-volatile storage: Keeps data even if toy runs out of battery
+void nvs_access() {
+
+    // Initialize NVS
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(err);
+
+    // Open
+    Serial.printf("\n");
+    Serial.printf("Opening Non-Volatile Storage (NVS) handle... ");
+    nvs_handle_t my_handle;
+    err = nvs_open("storage", NVS_READWRITE, &my_handle);
+
+    if (err != ESP_OK) {
+        Serial.printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
+    } else {
+        Serial.printf("Done\n");
+        Serial.printf("Retrieving SSID/PASSWORD\n");
+
+        size_t ssid_len;
+        size_t pass_len;
+
+        err = nvs_get_str(my_handle, "ssid", ssid, &ssid_len);
+        err |= nvs_get_str(my_handle, "pass", pass, &pass_len);
+
+        switch (err) {
+            case ESP_OK:
+                Serial.printf("Done\n");
+                break;
+            case ESP_ERR_NVS_NOT_FOUND:
+                Serial.printf("The value is not initialized yet!\n");
+                break;
+            default:
+                Serial.printf("Error (%s) reading!\n", esp_err_to_name(err));
+        }
+    }
+    // Close
+    nvs_close(my_handle);
+}
+
+void send_time_AWS(unsigned long playTime, unsigned long sleepTime) {
+    Serial.print("Sending play time to AWS: ");
+    Serial.println(playTime);
+    Serial.print("Sending sleep time to AWS: ");
+    Serial.println(sleepTime);
+
+    WiFiClient client; 
+    // Send POST request
+    if (client.connect("3.85.208.114", 5000)) {
+        String payload = "{\"test\": true, \"playTime\": " + String(playTime) + ", \"sleepTime\": " + String(sleepTime) + "}";
+        //String payload = "{\"playTime\": " + String(playTime) + ", \"sleepTime\": " + String(sleepTime) + "}";
+
+        client.println("POST /send-time HTTP/1.1");
+        client.println("Host: 3.85.208.114");
+        client.println("Content-Type: application/json");
+        client.print("Content-Length: ");
+        client.println(payload.length());
+        client.println();
+        client.print(payload);
+
+        // Read response from client (the debugger)
+        String response = client.readString();
+        Serial.println("Response: " + response);
+
+        client.stop();
+    } else {
+        Serial.println("Failed to connect to the server.");
+    }
+}
+
+// Manually reset AWS data for testing
+void reset_AWS_data() {
+    playTime = 0;
+    sleepTime = 0;
+    playStartTime = millis(); // Reset play timer
+    sleepStartTime = millis(); // Reset sleep timer
+    Serial.println("Play and sleep times reset for testing.");
 }
