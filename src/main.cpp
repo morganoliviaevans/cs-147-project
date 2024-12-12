@@ -257,8 +257,8 @@ void loop() {
             // If motion is not detected
             if (magnitude < 0.5) {
                 unsigned long elapsed = millis() - stateStartTime;
-                // And if it has been more than 1 minute                    // TESTING: CHANGED TO 5 SECONDS
-                if (millis() - stateStartTime > 5000) { 
+                // And if it has been more than 30 seconds
+                if (millis() - stateStartTime > 30000) { 
                     // Switch to hunting state
                     currentState = HUNTING;
                     // Reset state timer
@@ -293,8 +293,8 @@ void loop() {
                 // Reset state timer
                 stateStartTime = millis();
             } 
-            // If it has been more than 2 minutes                    // TESTING: CHANGED TO 5 SECONDS
-            if (millis() - stateStartTime > 5000) {
+            // If it has been more than 1 minute
+            if (millis() - stateStartTime > 60000) {
                 // Switch to sleep state
                 currentState = SLEEP;
                 // Reset state timer
@@ -416,7 +416,7 @@ void stop_motors() {
 void run_motors(int targetSpeed) {                                            
     // Define ramp parameters
     int initialSpeed = 150;  // Starting speed for ramp-up
-    int rampTime = 2000;    // Time to ramp down (in milliseconds)
+    int rampTime = 1000;    // Time to ramp down (in milliseconds)
 
     // Move motor 1 forward
     Serial.println("Motor 1 Forward...");
@@ -431,12 +431,12 @@ void run_motors(int targetSpeed) {
     ramp_down_motor_speed(initialSpeed, targetSpeed, rampTime);
 
     // Keep moving at the target speed for a random duration
-    delay(random(4000, 6000));
+    delay(random(2000, 6000));
 
-    // Pause motors for a random duration
+    // Pause motors for a random duration (2-6 seconds)
     stop_motors();
     Serial.println("Stopping Motors...");
-    delay(random(1500, 3000));
+    delay(random(2000, 6000));
 
     // Move motor 1 forward
     Serial.println("Motor 1 Forward...");
@@ -451,7 +451,7 @@ void run_motors(int targetSpeed) {
     ramp_down_motor_speed(initialSpeed, targetSpeed, rampTime);
 
     // Keep moving at the target speed for a random duration
-    delay(random(4000, 6000));
+    delay(random(1000, 3000));
 
     // Pause motors
     stop_motors();
