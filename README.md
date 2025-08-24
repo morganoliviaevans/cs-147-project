@@ -8,7 +8,7 @@ This repository contains the files for **"Smarter Playtime"**, a project develop
 
 - **Team Name**: Kitty Kinetics
 - **Team Members**:
-  - **Morgan Newton** – monewton@uci.edu
+  - **Morgan Olivia Evans** – morganoliviaevans@gmail.com
   - **Carm Hermosilla** – cyhermos@uci.edu
 
 ## Motivation
